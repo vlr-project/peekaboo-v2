@@ -38,8 +38,8 @@ class StableDiffusion(nn.Module):
         print('[INFO] sd.py: loading stable diffusion...please make sure you have run `huggingface-cli login`.')
         
         # Unlike the original code, I'll load these from the pipeline. This lets us use dreambooth models.
-        pipe = StableDiffusionPipeline.from_pretrained(checkpoint_path, torch_dtype=torch.float)
-        pipe.safety_checker = lambda images, _: images, False # Disable the NSFW checker (slows things down)
+        print('Checkpoint path', checkpoint_path)
+        pipe = StableDiffusionPipeline.from_pretrained(checkpoint_path, torch_dtype=torch.float, safety_checker=None) # Disable safechecker to increase inference speed
     
         pipe.scheduler = PNDMScheduler(beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=self.num_train_timesteps) #Error from scheduling_lms_discrete.py
         
@@ -117,7 +117,6 @@ class StableDiffusion(nn.Module):
         # w(t), sigma_t^2
         w = (1 - self.alphas[t])
         grad = w * (noise_pred - noise)
-
         # manually backward, since we omitted an item in grad and cannot simply autodiff
         latents.backward(gradient=grad, retain_graph=True)
         return 0 # dummy loss value
@@ -183,7 +182,7 @@ class StableDiffusion(nn.Module):
 
         imgs = 2 * imgs - 1
         posterior = self.vae.encode(imgs)
-        latents = posterior.sample() * 0.18215
+        latents = posterior.latent_dist.sample() * 0.18215
         
         assert len(latents.shape)==4 and latents.shape[1]==4 #[B, 4, H, W]
 
