@@ -40,7 +40,7 @@ def blend_torch_images(foreground, background, alpha):
     # Input assertions
     assert foreground.shape == background.shape
     C, H, W = foreground.shape
-    assert alpha.shape == (H, W), 'alpha is a matrix'
+    assert alpha.shape == (H, W), f'alpha is a matrix {alpha.shape} != ({H}, {W})'
 
     return foreground * alpha + background * (1 - alpha)
 
@@ -48,6 +48,8 @@ def blend_torch_images(foreground, background, alpha):
 class PeekabooSegmenter(nn.Module):
     def __init__(self,
                  image: np.ndarray,
+                 original_image,
+                 bb_path,
                  labels: List['BaseLabel'],
                  size: int = 256,
                  name: str = 'Untitled',
@@ -63,8 +65,9 @@ class PeekabooSegmenter(nn.Module):
 
         assert all(issubclass(type(label), BaseLabel) for label in labels)
         assert len(labels), 'Must have at least one class to segment'
-
+        self.original_image = original_image
         self.height = height
+        self.bb_path = bb_path
         self.width = width
         self.labels = labels
         self.name = name
@@ -102,9 +105,9 @@ class PeekabooSegmenter(nn.Module):
         self.set_background_color(rp.random_rgb_float_color())
 
     def get_alpha_mask(self):
-        bounding_boxes = torch.load(self.name+".pt").detach().cpu()
+        bounding_boxes = torch.load(self.bb_path).detach().cpu()
         
-        width, height, _ = self.image.size
+        height, width = rp.get_image_dimensions(self.original_image)
 
         mask_tensor = torch.zeros((height, width))
 
@@ -112,7 +115,16 @@ class PeekabooSegmenter(nn.Module):
             x_min, y_min, x_max, y_max = map(int, box)
             mask_tensor[y_min:y_max, x_min:x_max] = 1
 
-        return mask_tensor
+        return mask_tensor.unsqueeze(-1).expand_as(torch.tensor(self.original_image))
+
+    def make_mask_square(self, alpha_mask: np.ndarray, method='crop'):
+        height, width = rp.get_image_dimensions(alpha_mask)
+        min_dim = min(height, width)
+        max_dim = max(height, width)
+        if method == 'crop':
+            return self.make_mask_square(rp.crop_image(alpha_mask, min_dim, min_dim, origin='center'), 'scale')
+        if method == 'scale':
+            return torch.tensor(rp.resize_image(alpha_mask, (512, 512))).unsqueeze(0).repeat(self.num_labels, 1, 1) #.unsqueeze(-1).expand((512, 512, 3))
 
 
     def forward(self, alphas=None, bbox=None,return_alphas=False):
@@ -126,17 +138,19 @@ class PeekabooSegmenter(nn.Module):
 
             if alphas is None:
                 # alphas = self.alphas()
-                alphas = self.get_alpha_mask()
+                # alphas = np.dot_product(alphas, self.get_alpha_mask())
+                alphas = self.make_mask_square(self.get_alpha_mask())
 
+            rp.display(alphas[0])
             assert alphas.shape == (self.num_labels, self.height, self.width)
             assert alphas.min() >= 0 and alphas.max() <= 1
 
-            # for alpha in alphas:
-            #     output_image = blend_torch_images(foreground=self.foreground, background=self.background, alpha=alpha)
-            #     output_images.append(output_image)
+            for alpha in alphas:
+                output_image = blend_torch_images(foreground=self.foreground, background=self.background, alpha=alpha)
+                output_images.append(output_image)
 
-            # output_images = torch.stack(output_images)
-            output_images = blend_torch_images(foreground=self.foreground,background=self.background,alpha=alphas)
+            output_images = torch.stack(output_images)
+            # output_images = blend_torch_images(foreground=self.foreground,background=self.background,alpha=alphas)
             assert output_images.shape == (self.num_labels, 3, self.height, self.width)  # In BCHW form
 
             if return_alphas:
@@ -333,8 +347,8 @@ def make_image_square(image: np.ndarray, method='crop') -> np.ndarray:
         return rp.resize_image(image, (512, 512))
 
 
-def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['BaseLabel'] = None,
-
+def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: str, label: Optional['BaseLabel'] = None,
+                 
                  # Peekaboo Hyperparameters:
                  GRAVITY=1e-1 / 2,  # This is the one that needs the most tuning, depending on the prompt...
                  #   ...usually one of the following GRAVITY will work well: 1e-2, 1e-1/2, 1e-1, or 1.5*1e-1
@@ -357,13 +371,18 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     if label is None:
         label = SimpleLabel(name)
 
+    
     image_path = '<No image path given>'
     if isinstance(image, str):
         image_path = image
         image = rp.load_image(image)
 
     assert rp.is_image(image)
+
     assert issubclass(type(label), BaseLabel)
+
+    original_image = image.copy()
+
     image = rp.as_rgb_image(rp.as_float_image(make_image_square(image, square_image_method)))
     rp.tic()
     time_started = rp.get_current_date()
@@ -375,6 +394,8 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     # log_cell('Alpha Initializer') ########################################################################
 
     p = PeekabooSegmenter(image,
+                          original_image,
+                          bounding_box_path,
                           labels=[label],
                           name=name,
                           bilateral_kwargs=bilateral_kwargs,
