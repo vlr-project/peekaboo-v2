@@ -17,11 +17,12 @@ from source.learnable_textures import (LearnableImageFourier,
                                        LearnableImageRaster,
                                        LearnableImageRasterBilateral,
                                        LearnableTexturePackFourier,
-                                       LearnableTexturePackRaster)
+                                       LearnableTexturePackRaster,
+                                       LearnableImageRasterDetic)
 
 
 def make_learnable_image(height, width, num_channels, foreground=None, bilateral_kwargs: dict = {},
-                         representation='fourier'):
+                         representation='fourier', init_alpha=None):
     # Here we determine our image parametrization schema
     bilateral_blur = BilateralProxyBlur(foreground, **bilateral_kwargs)
     if representation == 'fourier bilateral':
@@ -32,6 +33,8 @@ def make_learnable_image(height, width, num_channels, foreground=None, bilateral
         return LearnableImageFourier(height, width, num_channels)  # A neural neural image
     elif representation == 'raster':
         return LearnableImageRaster(height, width, num_channels)  # A regular image
+    elif representation == 'detic':
+        return LearnableImageRasterDetic(init_alpha, height, width, num_channels) # Regular images using detic bounding boxes
     else:
         assert False, 'Invalid method: ' + representation
 
@@ -51,7 +54,7 @@ class PeekabooSegmenter(nn.Module):
                  original_image,
                  bb_path,
                  labels: List['BaseLabel'],
-                 size: int = 256,
+                 size: int = 512,
                  name: str = 'Untitled',
                  bilateral_kwargs: dict = {},
                  representation='fourier bilateral',
@@ -60,7 +63,7 @@ class PeekabooSegmenter(nn.Module):
                  ):
 
         super().__init__()
-
+        
         height = width = size  # We use square images for now
 
         assert all(issubclass(type(label), BaseLabel) for label in labels)
@@ -87,7 +90,9 @@ class PeekabooSegmenter(nn.Module):
 
         self.background = self.foreground * 0  # The background will be a solid color for now
 
-        self.alphas = make_learnable_image(height, width, num_channels=self.num_labels, foreground=self.foreground,
+        original_alpha_mask = self.get_alpha_mask().numpy()
+        init_alpha = self.make_mask_square(original_alpha_mask)
+        self.alphas = make_learnable_image(height, width, num_channels=self.num_labels, init_alpha=init_alpha, foreground=self.foreground,
                                            representation=self.representation, bilateral_kwargs=bilateral_kwargs)
 
     @property
@@ -115,7 +120,7 @@ class PeekabooSegmenter(nn.Module):
             x_min, y_min, x_max, y_max = map(int, box)
             mask_tensor[y_min:y_max, x_min:x_max] = 1
 
-        return mask_tensor.unsqueeze(-1).expand_as(torch.tensor(self.original_image))
+        return mask_tensor #.unsqueeze(-1).expand_as(torch.tensor(self.original_image))
 
     def make_mask_square(self, alpha_mask: np.ndarray, method='crop'):
         height, width = rp.get_image_dimensions(alpha_mask)
@@ -137,13 +142,13 @@ class PeekabooSegmenter(nn.Module):
             output_images = []
 
             if alphas is None:
-                # alphas = self.alphas()
+                alphas = self.alphas()
                 # alphas = np.dot_product(alphas, self.get_alpha_mask())
-                alphas = self.make_mask_square(self.get_alpha_mask())
+                # alphas = self.make_mask_square(self.get_alpha_mask())
 
-            rp.display(alphas[0])
+            alphas = torch.clamp(alphas, min=0., max=1)
             assert alphas.shape == (self.num_labels, self.height, self.width)
-            assert alphas.min() >= 0 and alphas.max() <= 1
+            assert alphas.min() >= 0 and alphas.max() <= 1, f"min = {alphas.min()}, max={alphas.max()}"
 
             for alpha in alphas:
                 output_image = blend_torch_images(foreground=self.foreground, background=self.background, alpha=alpha)
