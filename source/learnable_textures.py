@@ -184,6 +184,8 @@ class LearnableImageRasterSigmoided(LearnableImage):
 
 
 
+
+
 class LearnableImageRasterDetic(LearnableImage):
     def __init__(self,
                  init_alpha,
@@ -193,31 +195,46 @@ class LearnableImageRasterDetic(LearnableImage):
         super().__init__(height, width, num_channels)
 
         # An image paramterized by pixels
+        # random_init = torch.randn(num_channels,height,width)
+        
+        # self.image = nn.Parameter(torch.mul(init_alpha, random_init))
+        init_alpha[init_alpha == 0] = torch.randn(init_alpha[init_alpha == 0].shape) * 0.5
 
+        # For values in init_alpha that are 1, replace with random values between 0.5 and 1
+        init_alpha[init_alpha == 1] = 0.5 + torch.randn(init_alpha[init_alpha == 1].shape) * 0.5
+
+        # self.image = nn.Parameter(torch.mul(init_alpha, random_init))
         self.image = nn.Parameter(init_alpha)
+        # self.bilateral_blur = bilateral_blur
 
     def forward(self):
         output = self.image.clone()
 
         assert output.shape == (self.num_channels, self.height, self.width), f"{output.shape}, {self.num_channels}, {self.height}, {self.width}"
-
+        # output = self.bilateral_blur(output)
+        # output = torch.sigmoid(output)
         return output
     
 
+class LearnableImageRasterBilateralDetic(LearnableImageRasterDetic):
+    def __init__(self, init_alpha,
+                 height: int,
+                 width: int,
+                 num_channels: int = 3,
+                 bilateral_blur = None
+                 ):
+        _, height, width = bilateral_blur.image.shape
+        super().__init__(init_alpha, height, width, num_channels)
+        self.bilateral_blur = bilateral_blur
+
+    def forward(self):
+        output = self.image.clone()
+        output = self.bilateral_blur(output)
+        # output = torch.sigmoid(output)
+        return output
 
 
 class LearnableImageRaster(LearnableImage):
-    def create_mask_tensor(self, image_path, bounding_boxes):
-        with Image.open(image_path) as img:
-            width, height = img.size
-
-        mask_tensor = torch.zeros((height, width))
-
-        for box in bounding_boxes:
-            x_min, y_min, x_max, y_max = map(int, box)
-            mask_tensor[y_min:y_max, x_min:x_max] = 1
-
-        return mask_tensor
 
     def __init__(self,
                  height: int,

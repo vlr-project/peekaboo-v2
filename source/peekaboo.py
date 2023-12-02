@@ -18,6 +18,7 @@ from source.learnable_textures import (LearnableImageFourier,
                                        LearnableImageRasterBilateral,
                                        LearnableTexturePackFourier,
                                        LearnableTexturePackRaster,
+                                       LearnableImageRasterBilateralDetic,
                                        LearnableImageRasterDetic)
 
 
@@ -34,7 +35,8 @@ def make_learnable_image(height, width, num_channels, foreground=None, bilateral
     elif representation == 'raster':
         return LearnableImageRaster(height, width, num_channels)  # A regular image
     elif representation == 'detic':
-        return LearnableImageRasterDetic(init_alpha, height, width, num_channels) # Regular images using detic bounding boxes
+        # return LearnableImageRasterDetic(init_alpha, height, width, num_channels,bilateral_blur) # Regular images using detic bounding boxes
+        return LearnableImageRasterBilateralDetic(init_alpha, height, width, num_channels, bilateral_blur)
     else:
         assert False, 'Invalid method: ' + representation
 
@@ -125,7 +127,6 @@ class PeekabooSegmenter(nn.Module):
     def make_mask_square(self, alpha_mask: np.ndarray, method='crop'):
         height, width = rp.get_image_dimensions(alpha_mask)
         min_dim = min(height, width)
-        max_dim = max(height, width)
         if method == 'crop':
             return self.make_mask_square(rp.crop_image(alpha_mask, min_dim, min_dim, origin='center'), 'scale')
         if method == 'scale':
@@ -143,8 +144,6 @@ class PeekabooSegmenter(nn.Module):
 
             if alphas is None:
                 alphas = self.alphas()
-                # alphas = np.dot_product(alphas, self.get_alpha_mask())
-                # alphas = self.make_mask_square(self.get_alpha_mask())
 
             alphas = torch.clamp(alphas, min=0., max=1)
             assert alphas.shape == (self.num_labels, self.height, self.width)
@@ -351,6 +350,8 @@ def make_image_square(image: np.ndarray, method='crop') -> np.ndarray:
     if method == 'scale':
         return rp.resize_image(image, (512, 512))
 
+def print_grad_hook(grad):
+    print("Gradient:", grad)
 
 def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: str, label: Optional['BaseLabel'] = None,
                  
@@ -440,6 +441,7 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
             iter_num += 1
 
             alphas = p.alphas()
+            # param_hook = alphas.register_hook(print_grad_hook)
 
             for __ in range(BATCH_SIZE):
                 p.randomize_background()
@@ -450,7 +452,8 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
                                  )
 
             ((alphas.sum()) * GRAVITY).backward()
-
+            # print("Gradient norm", alphas.grad.norm())
+            
             optim.step()
             optim.zero_grad()
 
@@ -461,6 +464,8 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
                 if not _ % preview_interval:
                     timelapse_frames.append(p.display())
                     # rp.ptoc()
+            # param_hook.remove()
+
     except KeyboardInterrupt:
         log("Interrupted early, returning current results...")
         pass
