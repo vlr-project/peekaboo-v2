@@ -421,6 +421,7 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
     # log_cell('Create Optimizers') ########################################################################
 
     params = list(p.parameters())
+    print(params)
     optim = torch.optim.Adam(params, lr=1e-3)
     optim = torch.optim.SGD(params, lr=LEARNING_RATE)
 
@@ -433,11 +434,13 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
     preview_interval = NUM_ITER // 10  # Show 10 preview images throughout training to prevent output from being truncated
     preview_interval = max(1, preview_interval)
     log("Will show preview images every %i iterations" % (preview_interval))
-
+    gravity_decay_interval = NUM_ITER // 10
+    current_gravity = GRAVITY
+    gravity_decay_rate = 0.75
     try:
         display_eta = rp.eta(NUM_ITER)
-        for _ in range(NUM_ITER):
-            display_eta(_)
+        for i in range(NUM_ITER):
+            display_eta(i)
             iter_num += 1
 
             alphas = p.alphas()
@@ -450,6 +453,9 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
                     s.train_step(label.embedding, composite[None],
                                  guidance_scale=GUIDANCE_SCALE
                                  )
+            if i % gravity_decay_interval == 0 and i != 0:
+                current_gravity *= gravity_decay_rate
+                print(f"Updated Gravity: {current_gravity}")
 
             ((alphas.sum()) * GRAVITY).backward()
             # print("Gradient norm", alphas.grad.norm())
@@ -461,7 +467,7 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
                 # if not _%100:
                 # Don't overflow the notebook
                 # clear_output()
-                if not _ % preview_interval:
+                if not i % preview_interval:
                     timelapse_frames.append(p.display())
                     # rp.ptoc()
             # param_hook.remove()

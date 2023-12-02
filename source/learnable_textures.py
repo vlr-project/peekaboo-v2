@@ -195,16 +195,19 @@ class LearnableImageRasterDetic(LearnableImage):
         super().__init__(height, width, num_channels)
 
         # An image paramterized by pixels
-        # random_init = torch.randn(num_channels,height,width)
+        # random_init = torch.randn(height,width).unsqueeze(0).repeat(num_channels, 1, 1)
         
         # self.image = nn.Parameter(torch.mul(init_alpha, random_init))
-        init_alpha[init_alpha == 0] = torch.randn(init_alpha[init_alpha == 0].shape) * 0.5
+
+        init_alpha[init_alpha==0] = torch.empty(init_alpha[init_alpha == 0].shape).normal_(mean=0.2,std=0.2)
+        init_alpha[init_alpha == 1] = torch.empty(init_alpha[init_alpha == 1].shape).normal_(mean=0.5,std=0.5)
+        self.image = nn.Parameter(init_alpha)
+
+        # init_alpha[init_alpha == 0] = torch.randn(init_alpha[init_alpha == 0].shape) * 0.5
 
         # For values in init_alpha that are 1, replace with random values between 0.5 and 1
-        init_alpha[init_alpha == 1] = 0.5 + torch.randn(init_alpha[init_alpha == 1].shape) * 0.5
-
-        # self.image = nn.Parameter(torch.mul(init_alpha, random_init))
-        self.image = nn.Parameter(init_alpha)
+        # init_alpha[init_alpha == 1] = 0.5 + torch.randn(init_alpha[init_alpha == 1].shape) * 0.5
+        # self.image = nn.Parameter(init_alpha)
         # self.bilateral_blur = bilateral_blur
 
     def forward(self):
