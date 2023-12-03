@@ -436,8 +436,8 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
     log("Will show preview images every %i iterations" % (preview_interval))
     gravity_decay_interval = NUM_ITER // 10
     current_gravity = GRAVITY
-    gravity_decay_rate = 0.8
-    L2_REGULARIZATION = 0.05
+    gravity_decay_rate = 0.95
+    L2_REGULARIZATION = 0.005
     try:
         display_eta = rp.eta(NUM_ITER)
         for i in range(NUM_ITER):
@@ -459,10 +459,10 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
                 print(f"Updated Gravity: {current_gravity}")
 
             # ((alphas.sum()) * GRAVITY).backward()
-            total_loss = L2_REGULARIZATION * (alphas ** 2).sum()
+            l2_reg = L2_REGULARIZATION * (alphas ** 2).sum()
 
             # Calculate total loss with L2 regularization
-            # total_loss = ((alphas.sum()) * current_gravity) + l2_reg
+            total_loss = ((alphas.sum()) * current_gravity) + l2_reg
 
             total_loss.backward()
             
@@ -522,9 +522,9 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: st
     output_folder += '/%03i' % len(rp.get_subfolders(output_folder))
 
     save_peekaboo_results(results, output_folder)
-    print("Please wait - creating a training timelapse")
-    clear_output()
-    rp.display_image_slideshow(timelapse_frames)  # This can take a bit of time
+    # print("Please wait - creating a training timelapse")
+    # clear_output()
+    # rp.display_image_slideshow(timelapse_frames)  # This can take a bit of time
     print("Saved results at %s" % output_folder)
     icecream.ic(name, label, image_path, GRAVITY, BATCH_SIZE, NUM_ITER, GUIDANCE_SCALE, bilateral_kwargs)
 
