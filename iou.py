@@ -1,31 +1,23 @@
 import numpy as np
 from PIL import Image
+import torch
+import rp
 
-class ImageIoUCalculator:
-    def __init__(self, image_path_1, image_path_2):
-        self.image_array_1 = self.read_image_to_array(image_path_1)
-        self.image_array_2 = self.read_image_to_array(image_path_2)
+def make_mask_square( alpha_mask: np.ndarray, method='crop'):
+        height, width = rp.get_image_dimensions(alpha_mask)
+        min_dim = min(height, width)
+        if method == 'crop':
+            return make_mask_square(rp.crop_image(alpha_mask, min_dim, min_dim, origin='center'), 'scale')
+        if method == 'scale':
+            return torch.tensor(rp.resize_image(alpha_mask, (512, 512))).unsqueeze(0).repeat(1, 1, 1)
 
-    @staticmethod
-    def read_image_to_array(image_path):
-        with Image.open(image_path) as img:
-            image_array = np.array(img)
-        return image_array
 
-    @staticmethod
-    def calculate_iou(matrix1, matrix2):
-        # Ensure matrices are of the same size
-        if matrix1.shape != matrix2.shape:
-            raise ValueError("Both matrices must have the same dimensions")
+def calc_iou(mat1,mat2):
+    intersection = np.logical_and(mat1.numpy(), mat2.numpy())
+    union = np.logical_or(mat1.numpy(), mat2.numpy())
 
-        # Calculate Intersection and Union
-        intersection = np.logical_and(matrix1, matrix2)
-        union = np.logical_or(matrix1, matrix2)
+    # Compute IoU
+    iou = np.sum(intersection) / np.sum(union)
 
-        # Calculate IoU
-        iou = np.sum(intersection) / np.sum(union)
-
-        return iou
-
-    def get_iou(self):
-        return self.calculate_iou(self.image_array_1, self.image_array_2)
+    print("IoU:", iou)
+    return iou
