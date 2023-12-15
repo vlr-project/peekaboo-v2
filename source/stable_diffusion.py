@@ -111,6 +111,7 @@ class StableDiffusion(nn.Module):
             noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings)['sample']
 
         # perform guidance (high scale from paper!)
+        # import pdb; pdb.set_trace()
         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)
         noise_pred = noise_pred_uncond + guidance_scale * (noise_pred_text - noise_pred_uncond)
 

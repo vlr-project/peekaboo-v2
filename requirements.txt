@@ -1,4 +1,3 @@
-accelerate==0.12.0
 diffusers==0.2.4
 einops==0.4.1
 icecream==2.1.2
@@ -16,5 +15,5 @@ transformers==4.25.1
 easydict
 torchvision
 tensorboard
-accelerate=0.24.1
+accelerate==0.24.1
 scikit-image

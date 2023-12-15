@@ -17,11 +17,13 @@ from source.learnable_textures import (LearnableImageFourier,
                                        LearnableImageRaster,
                                        LearnableImageRasterBilateral,
                                        LearnableTexturePackFourier,
-                                       LearnableTexturePackRaster)
+                                       LearnableTexturePackRaster,
+                                       LearnableImageRasterBilateralDetic,
+                                       LearnableImageRasterDetic)
 
 
 def make_learnable_image(height, width, num_channels, foreground=None, bilateral_kwargs: dict = {},
-                         representation='fourier'):
+                         representation='fourier', init_alpha=None):
     # Here we determine our image parametrization schema
     bilateral_blur = BilateralProxyBlur(foreground, **bilateral_kwargs)
     if representation == 'fourier bilateral':
@@ -32,6 +34,9 @@ def make_learnable_image(height, width, num_channels, foreground=None, bilateral
         return LearnableImageFourier(height, width, num_channels)  # A neural neural image
     elif representation == 'raster':
         return LearnableImageRaster(height, width, num_channels)  # A regular image
+    elif representation == 'detic':
+        # return LearnableImageRasterDetic(init_alpha, height, width, num_channels,bilateral_blur) # Regular images using detic bounding boxes
+        return LearnableImageRasterBilateralDetic(init_alpha, height, width, num_channels, bilateral_blur)
     else:
         assert False, 'Invalid method: ' + representation
 
@@ -40,7 +45,7 @@ def blend_torch_images(foreground, background, alpha):
     # Input assertions
     assert foreground.shape == background.shape
     C, H, W = foreground.shape
-    assert alpha.shape == (H, W), 'alpha is a matrix'
+    assert alpha.shape == (H, W), f'alpha is a matrix {alpha.shape} != ({H}, {W})'
 
     return foreground * alpha + background * (1 - alpha)
 
@@ -48,8 +53,10 @@ def blend_torch_images(foreground, background, alpha):
 class PeekabooSegmenter(nn.Module):
     def __init__(self,
                  image: np.ndarray,
+                 original_image,
+                 bb_path,
                  labels: List['BaseLabel'],
-                 size: int = 256,
+                 size: int = 512,
                  name: str = 'Untitled',
                  bilateral_kwargs: dict = {},
                  representation='fourier bilateral',
@@ -58,13 +65,14 @@ class PeekabooSegmenter(nn.Module):
                  ):
 
         super().__init__()
-
+        
         height = width = size  # We use square images for now
 
         assert all(issubclass(type(label), BaseLabel) for label in labels)
         assert len(labels), 'Must have at least one class to segment'
-
+        self.original_image = original_image
         self.height = height
+        self.bb_path = bb_path
         self.width = width
         self.labels = labels
         self.name = name
@@ -84,7 +92,9 @@ class PeekabooSegmenter(nn.Module):
 
         self.background = self.foreground * 0  # The background will be a solid color for now
 
-        self.alphas = make_learnable_image(height, width, num_channels=self.num_labels, foreground=self.foreground,
+        original_alpha_mask = self.get_alpha_mask().numpy()
+        init_alpha = self.make_mask_square(original_alpha_mask)
+        self.alphas = make_learnable_image(height, width, num_channels=self.num_labels, init_alpha=init_alpha, foreground=self.foreground,
                                            representation=self.representation, bilateral_kwargs=bilateral_kwargs)
 
     @property
@@ -102,9 +112,9 @@ class PeekabooSegmenter(nn.Module):
         self.set_background_color(rp.random_rgb_float_color())
 
     def get_alpha_mask(self):
-        bounding_boxes = torch.load(self.name+".pt").detach().cpu()
+        bounding_boxes = torch.load(self.bb_path).detach().cpu()
         
-        width, height, _ = self.image.size
+        height, width = rp.get_image_dimensions(self.original_image)
 
         mask_tensor = torch.zeros((height, width))
 
@@ -112,7 +122,15 @@ class PeekabooSegmenter(nn.Module):
             x_min, y_min, x_max, y_max = map(int, box)
             mask_tensor[y_min:y_max, x_min:x_max] = 1
 
-        return mask_tensor
+        return mask_tensor #.unsqueeze(-1).expand_as(torch.tensor(self.original_image))
+
+    def make_mask_square(self, alpha_mask: np.ndarray, method='crop'):
+        height, width = rp.get_image_dimensions(alpha_mask)
+        min_dim = min(height, width)
+        if method == 'crop':
+            return self.make_mask_square(rp.crop_image(alpha_mask, min_dim, min_dim, origin='center'), 'scale')
+        if method == 'scale':
+            return torch.tensor(rp.resize_image(alpha_mask, (512, 512))).unsqueeze(0).repeat(self.num_labels, 1, 1) #.unsqueeze(-1).expand((512, 512, 3))
 
 
     def forward(self, alphas=None, bbox=None,return_alphas=False):
@@ -125,18 +143,18 @@ class PeekabooSegmenter(nn.Module):
             output_images = []
 
             if alphas is None:
-                # alphas = self.alphas()
-                alphas = self.get_alpha_mask()
+                alphas = self.alphas()
 
+            alphas = torch.clamp(alphas, min=0., max=1)
             assert alphas.shape == (self.num_labels, self.height, self.width)
-            assert alphas.min() >= 0 and alphas.max() <= 1
+            assert alphas.min() >= 0 and alphas.max() <= 1, f"min = {alphas.min()}, max={alphas.max()}"
 
-            # for alpha in alphas:
-            #     output_image = blend_torch_images(foreground=self.foreground, background=self.background, alpha=alpha)
-            #     output_images.append(output_image)
+            for alpha in alphas:
+                output_image = blend_torch_images(foreground=self.foreground, background=self.background, alpha=alpha)
+                output_images.append(output_image)
 
-            # output_images = torch.stack(output_images)
-            output_images = blend_torch_images(foreground=self.foreground,background=self.background,alpha=alphas)
+            output_images = torch.stack(output_images)
+            # output_images = blend_torch_images(foreground=self.foreground,background=self.background,alpha=alphas)
             assert output_images.shape == (self.num_labels, 3, self.height, self.width)  # In BCHW form
 
             if return_alphas:
@@ -332,9 +350,11 @@ def make_image_square(image: np.ndarray, method='crop') -> np.ndarray:
     if method == 'scale':
         return rp.resize_image(image, (512, 512))
 
+def print_grad_hook(grad):
+    print("Gradient:", grad)
 
-def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['BaseLabel'] = None,
-
+def run_peekaboo(name: str, image: Union[str, np.ndarray], bounding_box_path: str, label: Optional['BaseLabel'] = None,
+                 
                  # Peekaboo Hyperparameters:
                  GRAVITY=1e-1 / 2,  # This is the one that needs the most tuning, depending on the prompt...
                  #   ...usually one of the following GRAVITY will work well: 1e-2, 1e-1/2, 1e-1, or 1.5*1e-1
@@ -357,13 +377,18 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     if label is None:
         label = SimpleLabel(name)
 
+    
     image_path = '<No image path given>'
     if isinstance(image, str):
         image_path = image
         image = rp.load_image(image)
 
     assert rp.is_image(image)
+
     assert issubclass(type(label), BaseLabel)
+
+    original_image = image.copy()
+
     image = rp.as_rgb_image(rp.as_float_image(make_image_square(image, square_image_method)))
     rp.tic()
     time_started = rp.get_current_date()
@@ -375,6 +400,8 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     # log_cell('Alpha Initializer') ########################################################################
 
     p = PeekabooSegmenter(image,
+                          original_image,
+                          bounding_box_path,
                           labels=[label],
                           name=name,
                           bilateral_kwargs=bilateral_kwargs,
@@ -394,6 +421,7 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     # log_cell('Create Optimizers') ########################################################################
 
     params = list(p.parameters())
+    print(params)
     optim = torch.optim.Adam(params, lr=1e-3)
     optim = torch.optim.SGD(params, lr=LEARNING_RATE)
 
@@ -406,14 +434,18 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     preview_interval = NUM_ITER // 10  # Show 10 preview images throughout training to prevent output from being truncated
     preview_interval = max(1, preview_interval)
     log("Will show preview images every %i iterations" % (preview_interval))
-
+    gravity_decay_interval = NUM_ITER // 10
+    current_gravity = GRAVITY
+    gravity_decay_rate = 0.95
+    L2_REGULARIZATION = 0.005
     try:
         display_eta = rp.eta(NUM_ITER)
-        for _ in range(NUM_ITER):
-            display_eta(_)
+        for i in range(NUM_ITER):
+            display_eta(i)
             iter_num += 1
 
             alphas = p.alphas()
+            # param_hook = alphas.register_hook(print_grad_hook)
 
             for __ in range(BATCH_SIZE):
                 p.randomize_background()
@@ -422,9 +454,18 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
                     s.train_step(label.embedding, composite[None],
                                  guidance_scale=GUIDANCE_SCALE
                                  )
+            if i % gravity_decay_interval == 0 and i != 0:
+                current_gravity *= gravity_decay_rate
+                print(f"Updated Gravity: {current_gravity}")
 
-            ((alphas.sum()) * GRAVITY).backward()
+            # ((alphas.sum()) * GRAVITY).backward()
+            l2_reg = L2_REGULARIZATION * (alphas ** 2).sum()
 
+            # Calculate total loss with L2 regularization
+            total_loss = ((alphas.sum()) * current_gravity) + l2_reg
+
+            total_loss.backward()
+            
             optim.step()
             optim.zero_grad()
 
@@ -432,9 +473,11 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
                 # if not _%100:
                 # Don't overflow the notebook
                 # clear_output()
-                if not _ % preview_interval:
+                if not i % preview_interval:
                     timelapse_frames.append(p.display())
                     # rp.ptoc()
+            # param_hook.remove()
+
     except KeyboardInterrupt:
         log("Interrupted early, returning current results...")
         pass
@@ -479,9 +522,9 @@ def run_peekaboo(name: str, image: Union[str, np.ndarray], label: Optional['Base
     output_folder += '/%03i' % len(rp.get_subfolders(output_folder))
 
     save_peekaboo_results(results, output_folder)
-    print("Please wait - creating a training timelapse")
-    clear_output()
-    rp.display_image_slideshow(timelapse_frames)  # This can take a bit of time
+    # print("Please wait - creating a training timelapse")
+    # clear_output()
+    # rp.display_image_slideshow(timelapse_frames)  # This can take a bit of time
     print("Saved results at %s" % output_folder)
     icecream.ic(name, label, image_path, GRAVITY, BATCH_SIZE, NUM_ITER, GUIDANCE_SCALE, bilateral_kwargs)
 
