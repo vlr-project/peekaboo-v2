@@ -3,7 +3,7 @@
 	url = ./detectron2
 [submodule "Detic/Detic"]
 	path = Detic/Detic
-	url = ./Detic
+	url = https://github.com/vlr-project/Detic.git
 [submodule "refer"]
 	path = refer
-	url = ./refer/
+	url = https://github.com/vlr-project/refer.git
